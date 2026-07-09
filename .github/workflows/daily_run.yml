@@ -16,12 +16,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          # No caching here to prevent 'requirements.txt not found' errors
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas numpy scipy psxdata requests
+          # Added scikit-learn to the installation list
+          pip install pandas numpy scipy psxdata requests scikit-learn
 
       - name: Execute Optimization and Notify
         env:
