@@ -1,3 +1,5 @@
+import os
+import requests
 import pandas as pd
 import numpy as np
 from scipy.optimize import minimize
@@ -41,21 +43,15 @@ def fetch_closing_prices(tickers, days=365):
     return portfolio_df
 
 def black_litterman_optimization(prices_df, market_caps):
-    # Guardrail: Abort if no data was fetched
     if prices_df.empty:
-        print("Error: No price data available.")
         return {}
 
     returns = prices_df.pct_change().dropna()
-    
-    # Guardrail: Drop assets with zero variance to prevent LedoitWolf crashes
     returns = returns.loc[:, returns.var() > 0]
     
     tickers = returns.columns.tolist()
     num_assets = len(tickers)
-    
-    if num_assets == 0:
-        return {}
+    if num_assets == 0: return {}
 
     lw = LedoitWolf()
     cov_matrix = lw.fit(returns).covariance_ * 252 
@@ -91,13 +87,10 @@ def black_litterman_optimization(prices_df, market_caps):
     if len(P_list) > 0:
         P = np.array(P_list)
         Q = np.array(Q_list)
-        
         tau = 0.05
         omega = np.diag(np.diag(np.dot(np.dot(P, tau * cov_matrix), P.T)))
-        
         tau_cov_inv = np.linalg.inv(tau * cov_matrix)
         omega_inv = np.linalg.inv(omega)
-        
         term1 = np.linalg.inv(tau_cov_inv + np.dot(np.dot(P.T, omega_inv), P))
         term2 = np.dot(tau_cov_inv, pi) + np.dot(np.dot(P.T, omega_inv), Q)
         bl_returns = np.dot(term1, term2)
@@ -110,13 +103,9 @@ def black_litterman_optimization(prices_df, market_caps):
         utility = port_return - (risk_aversion / 2) * port_variance
         return -utility 
 
-    # Guardrail: Dynamic upper bounds prevent mathematically impossible constraints
-    # If the API drops too many tickers, the ceiling automatically raises so the sum can reach 100%
     dynamic_ceiling = max(0.15, 1.0 / num_assets)
-    
     constraints = ({'type': 'eq', 'fun': lambda weights: np.sum(weights) - 1})
     bounds = tuple((0.01, dynamic_ceiling) for _ in range(num_assets)) 
-    
     initial_guess = np.full(num_assets, 1.0 / num_assets) 
     
     result = minimize(
@@ -126,17 +115,51 @@ def black_litterman_optimization(prices_df, market_caps):
         bounds=bounds, 
         constraints=constraints
     )
-    
     return dict(zip(tickers, result.x))
 
+def send_discord_embed(optimal_weights):
+    webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
+    if not webhook_url:
+        print("Webhook URL not found. Exiting.")
+        return
+        
+    embed_fields = []
+    
+    # Group the output cleanly by sector for the Discord Embed
+    for sector_name, sector_tickers in SECTORS.items():
+        sector_str = ""
+        for ticker in sector_tickers:
+            if ticker in optimal_weights:
+                weight_pct = optimal_weights[ticker] * 100
+                sector_str += f"`{ticker:<6} | {weight_pct:>5.2f}%`\n"
+        
+        embed_fields.append({
+            "name": f"📁 {sector_name}",
+            "value": sector_str if sector_str else "N/A",
+            "inline": True
+        })
+
+    embed = {
+        "title": "📈 PSX Black-Litterman Allocations",
+        "description": "Optimized 25-asset universe targeted for capital protection.",
+        "color": 3066993, 
+        "fields": embed_fields,
+        "footer": {
+            "text": f"Generated: {datetime.now(PKT).strftime('%Y-%m-%d %H:%M:%S PKT')}"
+        }
+    }
+    
+    payload = {"embeds": [embed]}
+    requests.post(webhook_url, json=payload).raise_for_status()
+
 if __name__ == "__main__":
-    print(f"Fetching historical data for 25 PSX equities...")
+    print("Fetching data and running Black-Litterman optimization...")
     prices = fetch_closing_prices(TICKERS)
+    weights = black_litterman_optimization(prices, MARKET_CAPS)
     
-    print("Executing Black-Litterman Optimization...")
-    optimal_weights = black_litterman_optimization(prices, MARKET_CAPS)
-    
-    if optimal_weights:
-        print("\n--- Optimized Target Allocations ---")
-        for ticker, weight in sorted(optimal_weights.items(), key=lambda item: item[1], reverse=True):
-            print(f"{ticker:<6} | Target: {weight * 100:>5.2f}%")
+    if weights:
+        print("Optimization complete. Dispatching to Discord...")
+        send_discord_embed(weights)
+        print("Success.")
+    else:
+        print("Failed to compute weights.")
