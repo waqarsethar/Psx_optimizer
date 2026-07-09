@@ -1,12 +1,21 @@
+import os
+import requests
 import pandas as pd
 import numpy as np
 from scipy.optimize import minimize
 import psxdata
 from datetime import datetime, timedelta
-import requests
-import os
 
 TICKERS = ["MEBL", "EFERT", "HUBC", "LUCK", "SYS"]
+
+# Map tickers to sectors for the embed fields
+SECTOR_MAP = {
+    "MEBL": "🏦 Commercial Banks",
+    "EFERT": "🌱 Fertilizer",
+    "HUBC": "⚡ Power Generation",
+    "LUCK": "🏗️ Cement",
+    "SYS":  "💻 Technology"
+}
 
 def fetch_closing_prices(tickers, days=365):
     start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
@@ -36,12 +45,13 @@ def optimize_for_minimum_volatility(prices_df):
     result = minimize(objective_variance, initial_guess, method='SLSQP', bounds=bounds, constraints=constraints)
     return result.x
 
-def send_to_discord(message):
+def send_discord_embed(embed_dict):
     webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
     if not webhook_url:
         raise ValueError("DISCORD_WEBHOOK_URL environment variable is not set.")
     
-    payload = {"content": message}
+    # Discord expects an 'embeds' array in the JSON payload
+    payload = {"embeds": [embed_dict]}
     response = requests.post(webhook_url, json=payload)
     response.raise_for_status()
 
@@ -49,14 +59,31 @@ if __name__ == "__main__":
     prices = fetch_closing_prices(TICKERS)
     optimal_weights = optimize_for_minimum_volatility(prices)
     
-    # Format the message for Discord using Markdown code blocks for alignment
-    report = f"📊 **Daily PSX Portfolio Targets** ({datetime.now().strftime('%Y-%m-%d')})\n```\n"
-    
+    # 1. Build the individual fields for each sector/ticker
+    embed_fields = []
     for i, ticker in enumerate(TICKERS):
         live_data = psxdata.quote(ticker)
         current_price = live_data.get('current_price', 'N/A') if live_data is not None else 'N/A'
         weight_pct = optimal_weights[i] * 100
-        report += f"{ticker:<6} | Target: {weight_pct:>5.2f}% | Live: Rs {current_price}\n"
         
-    report += "```"
-    send_to_discord(report)
+        sector_label = SECTOR_MAP.get(ticker, "Sector")
+        
+        embed_fields.append({
+            "name": f"{sector_label} ({ticker})",
+            "value": f"**Target:** {weight_pct:.2f}%\n**Live:** Rs {current_price}",
+            "inline": True # Set to False if you want them stacked vertically
+        })
+        
+    # 2. Construct the main embed object
+    embed = {
+        "title": "📈 PSX Daily Portfolio Optimization",
+        "description": "Minimum volatility target allocations based on 1-year covariance.",
+        "color": 3066993, # Hex 0x2ECC71 (Emerald Green) converted to a base-10 integer
+        "fields": embed_fields,
+        "footer": {
+            "text": f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S PKT')}"
+        }
+    }
+    
+    # 3. Dispatch the payload
+    send_discord_embed(embed)
