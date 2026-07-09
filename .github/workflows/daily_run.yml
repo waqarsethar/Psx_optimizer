@@ -2,9 +2,8 @@ name: Daily PSX Portfolio Optimizer
 
 on:
   schedule:
-    # Runs at 11:00 UTC (16:00 PKT) Monday through Friday
     - cron: '0 11 * * 1-5'
-  workflow_dispatch: # Allows you to trigger it manually via the UI to test
+  workflow_dispatch:
 
 jobs:
   run-optimizer:
@@ -17,7 +16,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          # Removed the cache line because dependencies are installed inline below
+          # No caching here to prevent 'requirements.txt not found' errors
 
       - name: Install dependencies
         run: |
